@@ -504,13 +504,21 @@ impl<'a> ConvertContext<'a> {
             .cs("Courier New");
 
         let mut d = docx;
-        for line in code.lines() {
+        let use_border = self.config.code_block.border;
+        let lines: Vec<&str> = code.lines().collect();
+        let n = lines.len();
+        for (i, line) in lines.iter().enumerate() {
             let run = Run::new()
-                .add_text(line)
+                .add_text(*line)
                 .size(styles::pt_to_half_point(9.0))
                 .fonts(fonts.clone());
 
-            let para = Paragraph::new().add_run(run);
+            let mut para = Paragraph::new().add_run(run);
+            if use_border {
+                para.property = para
+                    .property
+                    .set_borders(code_block_borders(i == 0, i == n - 1));
+            }
             d = d.add_paragraph(para);
         }
         d
@@ -699,6 +707,26 @@ fn is_japanese_char(c: char) -> bool {
         '\u{FF00}'..='\u{FFEF}' | // 全角文字
         '\u{3000}'..='\u{303F}'   // CJK記号
     )
+}
+
+/// コードブロック用の段落罫線を生成する。
+/// 複数行のコードブロック全体を一つの枠で囲むため、先頭/末尾で設定を変える。
+/// - 先頭行: 上・左・右の罫線 ＋ Between（次行との間を繋ぐ）
+/// - 中間行: 左・右の罫線 ＋ Between
+/// - 末尾行: 下・左・右の罫線（Between なし）
+/// - 1行のみ: 上下左右すべて
+fn code_block_borders(is_first: bool, is_last: bool) -> ParagraphBorders {
+    let make = |pos| ParagraphBorder::new(pos).size(4).space(4);
+    let mut pb = ParagraphBorders::with_empty();
+    pb = pb.set(make(ParagraphBorderPosition::Left));
+    pb = pb.set(make(ParagraphBorderPosition::Right));
+    if is_first {
+        pb = pb.set(make(ParagraphBorderPosition::Top));
+    }
+    if is_last {
+        pb = pb.set(make(ParagraphBorderPosition::Bottom));
+    }
+    pb
 }
 
 #[cfg(test)]

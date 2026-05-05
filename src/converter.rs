@@ -107,11 +107,23 @@ impl<'a> ConvertContext<'a> {
     }
 
     fn convert_heading(&mut self, docx: Docx, level: u8, content: &[Inline]) -> Docx {
-        // heading_mgr のカウンタを進める（番号同期のため）
-        let _ = self.heading_mgr.next_heading(level, content);
+        // heading_shift モードかつ # (level==1) → 表題として出力
+        if self.config.heading.heading_shift && level == 1 {
+            return self.convert_title(docx, content);
+        }
 
-        // H1 出現時: 章番号を更新し、章内カウンタをリセット
-        if level == 1 {
+        // heading_shift モードでは ## 以降を1段下げる (## → H1 相当)
+        let effective_level = if self.config.heading.heading_shift {
+            level - 1
+        } else {
+            level
+        };
+
+        // heading_mgr のカウンタを進める（番号同期のため）
+        let _ = self.heading_mgr.next_heading(effective_level, content);
+
+        // H1 相当出現時: 章番号を更新し、章内カウンタをリセット
+        if effective_level == 1 {
             self.chapter_number = self.heading_mgr.current_h1_number();
             self.figure_in_chapter = 0;
             self.table_in_chapter = 0;
@@ -119,13 +131,15 @@ impl<'a> ConvertContext<'a> {
 
         // テキストから既存の番号部分を除去
         let plain_text: String = content.iter().map(|i| i.to_plain_text()).collect();
-        let display_text = self.heading_mgr.strip_number(level, plain_text.trim());
+        let display_text = self
+            .heading_mgr
+            .strip_number(effective_level, plain_text.trim());
 
         // Run はテキストのみ（フォント・サイズ・boldはスタイルが担当）
         let run = Run::new().add_text(&display_text);
 
         // スタイル ID: 見出し1="1", 見出し2="2", ...
-        let style_id = level.to_string();
+        let style_id = effective_level.to_string();
 
         // 段落にスタイルと numbering を適用
         let para = Paragraph::new()
@@ -133,10 +147,19 @@ impl<'a> ConvertContext<'a> {
             .style(&style_id)
             .numbering(
                 NumberingId::new(styles::HEADING_NUM_ID),
-                IndentLevel::new((level as usize).saturating_sub(1)),
+                IndentLevel::new((effective_level as usize).saturating_sub(1)),
             )
             .keep_next(true);
 
+        docx.add_paragraph(para)
+    }
+
+    fn convert_title(&self, docx: Docx, content: &[Inline]) -> Docx {
+        let plain_text: String = content.iter().map(|i| i.to_plain_text()).collect();
+        let run = Run::new().add_text(plain_text.trim());
+        let para = Paragraph::new()
+            .add_run(run)
+            .style(styles::TITLE_STYLE_ID);
         docx.add_paragraph(para)
     }
 

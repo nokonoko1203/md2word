@@ -30,6 +30,8 @@ pub struct Config {
     pub line_numbers: LineNumberConfig,
     #[serde(default)]
     pub code_block: CodeBlockConfig,
+    #[serde(default)]
+    pub heading: HeadingConfig,
 }
 
 #[derive(Debug, Deserialize)]
@@ -394,6 +396,30 @@ pub struct CodeBlockConfig {
 impl Default for CodeBlockConfig {
     fn default() -> Self {
         Self { border: false }
+    }
+}
+
+/// 見出し関連設定
+#[derive(Debug, Deserialize)]
+pub struct HeadingConfig {
+    /// # → 表題、## → 見出し1、### → 見出し2 … とレベルをシフトする
+    #[serde(default)]
+    pub heading_shift: bool,
+    /// 表題スタイルのフォントサイズ (pt)  ※ heading_shift = true 時に使用
+    #[serde(default = "default_title_size")]
+    pub title_size: f64,
+}
+
+fn default_title_size() -> f64 {
+    18.0
+}
+
+impl Default for HeadingConfig {
+    fn default() -> Self {
+        Self {
+            heading_shift: false,
+            title_size: default_title_size(),
+        }
     }
 }
 

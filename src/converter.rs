@@ -67,7 +67,7 @@ impl<'a> ConvertContext<'a> {
         Self {
             config,
             base_path,
-            heading_mgr: HeadingManager::new(),
+            heading_mgr: HeadingManager::new(config.numbering.base_header.offset()),
             chapter_number: 0,
             figure_in_chapter: 0,
             table_in_chapter: 0,
@@ -107,17 +107,27 @@ impl<'a> ConvertContext<'a> {
     }
 
     fn convert_heading(&mut self, docx: Docx, level: u8, content: &[Inline]) -> Docx {
+        let base_header = self.config.numbering.base_header;
+        let numbering_ilvl = base_header.heading_ilvl(level);
+
         // heading_mgr のカウンタを進める（番号同期のため）
         let _ = self.heading_mgr.next_heading(level, content);
 
-        // H1 出現時: 章番号を更新し、章内カウンタをリセット
-        if level == 1 {
-            self.chapter_number = self.heading_mgr.current_h1_number();
+        // 章境界（base レベル、none のときは従来どおり H1）:
+        // 章番号を更新し、章内カウンタをリセット
+        let offset = base_header.offset();
+        let chapter_level = offset.map_or(1, |o| o + 1);
+        if level == chapter_level {
+            self.chapter_number = match offset {
+                Some(_) => self.heading_mgr.current_chapter_number(),
+                // 無番号でも H1 を章の区切りとして数える
+                None => self.chapter_number + 1,
+            };
             self.figure_in_chapter = 0;
             self.table_in_chapter = 0;
         }
 
-        // テキストから既存の番号部分を除去
+        // テキストから既存の番号部分を除去（無番号レベルはそのまま）
         let plain_text: String = content.iter().map(|i| i.to_plain_text()).collect();
         let display_text = self.heading_mgr.strip_number(level, plain_text.trim());
 
@@ -127,15 +137,16 @@ impl<'a> ConvertContext<'a> {
         // スタイル ID: 見出し1="1", 見出し2="2", ...
         let style_id = level.to_string();
 
-        // 段落にスタイルと numbering を適用
-        let para = Paragraph::new()
+        let mut para = Paragraph::new()
             .add_run(run)
             .style(&style_id)
-            .numbering(
-                NumberingId::new(styles::HEADING_NUM_ID),
-                IndentLevel::new((level as usize).saturating_sub(1)),
-            )
             .keep_next(true);
+        if let Some(ilvl) = numbering_ilvl {
+            para = para.numbering(
+                NumberingId::new(styles::HEADING_NUM_ID),
+                IndentLevel::new(ilvl),
+            );
+        }
 
         docx.add_paragraph(para)
     }
@@ -704,7 +715,107 @@ fn is_japanese_char(c: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::BaseHeader;
     use docx_rs::{DocumentChild, HyperlinkData, ParagraphChild, RunChild};
+
+    fn heading(level: u8, text: &str) -> Block {
+        Block::Heading {
+            level,
+            content: vec![Inline::Text(text.to_string())],
+        }
+    }
+
+    fn paragraphs(docx: &Docx) -> Vec<&Paragraph> {
+        docx.document
+            .children
+            .iter()
+            .filter_map(|child| match child {
+                DocumentChild::Paragraph(p) => Some(p.as_ref()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn paragraph_text(para: &Paragraph) -> String {
+        let mut text = String::new();
+        for child in &para.children {
+            if let ParagraphChild::Run(run) = child {
+                for run_child in &run.children {
+                    if let RunChild::Text(t) = run_child {
+                        text.push_str(&t.text);
+                    }
+                }
+            }
+        }
+        text
+    }
+
+    #[test]
+    fn base_header_h2_leaves_h1_unnumbered_and_shifts_h2_to_ilvl0() {
+        let mut config = Config::default();
+        config.numbering.base_header = BaseHeader::H2;
+
+        let blocks = vec![heading(1, "1 タイトル"), heading(2, "はじめに")];
+        let docx = convert_to_docx(&blocks, &config, Path::new(".")).unwrap();
+        let paras = paragraphs(&docx);
+
+        // H1: numbering なし、テキストは strip されない
+        assert!(paras[0].property.numbering_property.is_none());
+        assert_eq!(paragraph_text(paras[0]), "1 タイトル");
+
+        // H2: numId=2, ilvl=0
+        let np = paras[1]
+            .property
+            .numbering_property
+            .as_ref()
+            .expect("H2 should be numbered");
+        assert_eq!(np.id.as_ref().unwrap().id, styles::HEADING_NUM_ID);
+        assert_eq!(np.level.as_ref().unwrap().val, 0);
+    }
+
+    #[test]
+    fn base_header_none_leaves_all_headings_unnumbered() {
+        let mut config = Config::default();
+        config.numbering.base_header = BaseHeader::None;
+
+        let blocks = vec![
+            heading(1, "タイトル"),
+            heading(2, "1.1 節"),
+            heading(3, "項"),
+        ];
+        let docx = convert_to_docx(&blocks, &config, Path::new(".")).unwrap();
+
+        for para in paragraphs(&docx) {
+            assert!(para.property.numbering_property.is_none());
+        }
+    }
+
+    #[test]
+    fn chapter_figure_numbers_follow_base_header_h2() {
+        let mut config = Config::default();
+        config.numbering.base_header = BaseHeader::H2;
+        config.numbering.figure_format = "chapter".to_string();
+
+        let mut ctx = ConvertContext::new(&config, Path::new("."));
+        let docx = ctx.convert_block(Docx::new(), &heading(1, "タイトル"));
+        let docx = ctx.convert_block(docx, &heading(2, "はじめに"));
+        assert_eq!(ctx.next_figure_number(), "1.1");
+        let _ = ctx.convert_block(docx, &heading(2, "次章"));
+        assert_eq!(ctx.next_figure_number(), "2.1");
+    }
+
+    #[test]
+    fn chapter_boundary_stays_h1_when_base_header_none() {
+        let mut config = Config::default();
+        config.numbering.base_header = BaseHeader::None;
+        config.numbering.figure_format = "chapter".to_string();
+
+        let mut ctx = ConvertContext::new(&config, Path::new("."));
+        let docx = ctx.convert_block(Docx::new(), &heading(1, "第一章"));
+        assert_eq!(ctx.next_figure_number(), "1.1");
+        let _ = ctx.convert_block(docx, &heading(1, "第二章"));
+        assert_eq!(ctx.next_figure_number(), "2.1");
+    }
 
     #[test]
     fn converts_inline_link_to_word_hyperlink() {

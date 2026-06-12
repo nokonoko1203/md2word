@@ -238,6 +238,38 @@ pub struct NumberingConfig {
     pub figure_format: String,
     #[serde(default = "default_table_format")]
     pub table_format: String,
+    #[serde(default)]
+    pub base_header: BaseHeader,
+}
+
+/// 見出し採番の基準レベル
+/// h1: H1 から採番（従来挙動）、h2: H1 は無番号で H2 が "1."、none: 全見出し無番号
+#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum BaseHeader {
+    #[default]
+    H1,
+    H2,
+    None,
+}
+
+impl BaseHeader {
+    /// 採番オフセット。markdown レベル L の実効採番レベルは L - offset。
+    /// None（無番号）の場合は None を返す。
+    pub fn offset(self) -> Option<u8> {
+        match self {
+            BaseHeader::H1 => Some(0),
+            BaseHeader::H2 => Some(1),
+            BaseHeader::None => None,
+        }
+    }
+
+    /// markdown レベルに対応する Word 採番の ilvl（0始まり）。
+    /// 無番号レベル（base より浅い、または base_header = "none"）は None。
+    pub fn heading_ilvl(self, markdown_level: u8) -> Option<usize> {
+        let eff = markdown_level.checked_sub(self.offset()?)?;
+        eff.checked_sub(1).map(usize::from)
+    }
 }
 
 fn default_figure_format() -> String {
@@ -252,6 +284,7 @@ impl Default for NumberingConfig {
         Self {
             figure_format: default_figure_format(),
             table_format: default_table_format(),
+            base_header: BaseHeader::default(),
         }
     }
 }
@@ -346,5 +379,42 @@ impl Config {
         let content = std::fs::read_to_string(path)?;
         let config: Config = toml::from_str(&content)?;
         Ok(config)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn base_header_defaults_to_h1() {
+        let config: Config = toml::from_str("").unwrap();
+        assert_eq!(config.numbering.base_header, BaseHeader::H1);
+        assert_eq!(config.numbering.base_header.offset(), Some(0));
+    }
+
+    #[test]
+    fn parses_base_header_h2_and_none() {
+        let config: Config = toml::from_str("[numbering]\nbase_header = \"h2\"").unwrap();
+        assert_eq!(config.numbering.base_header, BaseHeader::H2);
+        assert_eq!(config.numbering.base_header.offset(), Some(1));
+
+        let config: Config = toml::from_str("[numbering]\nbase_header = \"none\"").unwrap();
+        assert_eq!(config.numbering.base_header, BaseHeader::None);
+        assert_eq!(config.numbering.base_header.offset(), None);
+    }
+
+    #[test]
+    fn rejects_invalid_base_header() {
+        assert!(toml::from_str::<Config>("[numbering]\nbase_header = \"h3\"").is_err());
+    }
+
+    #[test]
+    fn heading_ilvl_maps_markdown_levels() {
+        assert_eq!(BaseHeader::H1.heading_ilvl(1), Some(0));
+        assert_eq!(BaseHeader::H1.heading_ilvl(3), Some(2));
+        assert_eq!(BaseHeader::H2.heading_ilvl(1), None);
+        assert_eq!(BaseHeader::H2.heading_ilvl(2), Some(0));
+        assert_eq!(BaseHeader::None.heading_ilvl(3), None);
     }
 }

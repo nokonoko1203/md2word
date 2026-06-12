@@ -41,6 +41,19 @@ const HEADING2_AFTER_PT: f64 = 8.0;
 /// - AbstractNumbering (id=8): 見出し番号 Level 0-3
 /// - Numbering (id=2): abstractNumId=8
 pub fn setup_document_styles(docx: Docx, config: &Config) -> Docx {
+    // 採番オフセット（base_header 設定）。None = 全見出し無番号
+    let base_header = config.numbering.base_header;
+    let offset = base_header.offset();
+    // 採番対象のレベルなら見出しスタイルに採番をバインドする
+    let bind_numbering = |mut style: Style, markdown_level: u8| -> Style {
+        if let Some(ilvl) = base_header.heading_ilvl(markdown_level) {
+            style.paragraph_property = style
+                .paragraph_property
+                .numbering(NumberingId::new(HEADING_NUM_ID), IndentLevel::new(ilvl));
+        }
+        style
+    };
+
     // --- docDefaults ---
     // テーマファイルを生成できないため、実フォント名を直接指定
     let default_fonts = RunFonts::new()
@@ -79,7 +92,7 @@ pub fn setup_document_styles(docx: Docx, config: &Config) -> Docx {
         .east_asia(&config.fonts.heading_ja)
         .cs(&config.fonts.heading_en);
 
-    let mut heading1_style = Style::new("1", StyleType::Paragraph)
+    let heading1_style = Style::new("1", StyleType::Paragraph)
         .name("heading 1")
         .based_on("Normal")
         .next("Normal")
@@ -92,17 +105,14 @@ pub fn setup_document_styles(docx: Docx, config: &Config) -> Docx {
                 .after(pt_to_twip(HEADING1_AFTER_PT) as u32),
         )
         .outline_lvl(0);
-    // sample.docx 準拠: numId のみ（ilvl は省略 → デフォルト 0）
-    heading1_style.paragraph_property = heading1_style
-        .paragraph_property
-        .numbering_property(NumberingProperty::new().id(NumberingId::new(HEADING_NUM_ID)));
+    let heading1_style = bind_numbering(heading1_style, 1);
 
     // --- 見出し2 (id="2") ---
     // basedOn=見出し1("1"), next=Normal("a")
     // outlineLvl=1
     // 12pt (sz=24)
     // フォントは見出し1から継承
-    let mut heading2_style = Style::new("2", StyleType::Paragraph)
+    let heading2_style = Style::new("2", StyleType::Paragraph)
         .name("heading 2")
         .based_on("1")
         .next("Normal")
@@ -113,13 +123,7 @@ pub fn setup_document_styles(docx: Docx, config: &Config) -> Docx {
                 .after(pt_to_twip(HEADING2_AFTER_PT) as u32),
         )
         .outline_lvl(1);
-    // sample.docx 準拠: ilvl のみ（numId は basedOn=heading1 から継承）
-    {
-        let mut np = NumberingProperty::new();
-        np.level = Some(IndentLevel::new(1));
-        heading2_style.paragraph_property =
-            heading2_style.paragraph_property.numbering_property(np);
-    }
+    let heading2_style = bind_numbering(heading2_style, 2);
 
     // --- 見出し3 (id="3") ---
     // basedOn=Normal("a"), next=Normal("a")
@@ -132,7 +136,7 @@ pub fn setup_document_styles(docx: Docx, config: &Config) -> Docx {
         .east_asia(&config.fonts.heading_ja)
         .cs(&config.fonts.heading_en);
 
-    let mut heading3_style = Style::new("3", StyleType::Paragraph)
+    let heading3_style = Style::new("3", StyleType::Paragraph)
         .name("heading 3")
         .based_on("Normal")
         .next("Normal")
@@ -140,9 +144,7 @@ pub fn setup_document_styles(docx: Docx, config: &Config) -> Docx {
         .bold()
         .fonts(heading3_fonts)
         .outline_lvl(2);
-    heading3_style.paragraph_property = heading3_style
-        .paragraph_property
-        .numbering(NumberingId::new(HEADING_NUM_ID), IndentLevel::new(2));
+    let heading3_style = bind_numbering(heading3_style, 3);
 
     // --- 見出し4 (id="4") ---
     // basedOn=Normal("a"), next=Normal("a")
@@ -152,7 +154,7 @@ pub fn setup_document_styles(docx: Docx, config: &Config) -> Docx {
     // indent: left=709, hanging=709
     let heading4_fonts = RunFonts::new().east_asia(&config.fonts.heading_ja);
 
-    let mut heading4_style = Style::new("4", StyleType::Paragraph)
+    let heading4_style = Style::new("4", StyleType::Paragraph)
         .name("heading 4")
         .based_on("Normal")
         .next("Normal")
@@ -166,9 +168,7 @@ pub fn setup_document_styles(docx: Docx, config: &Config) -> Docx {
             None,
         )
         .outline_lvl(3);
-    heading4_style.paragraph_property = heading4_style
-        .paragraph_property
-        .numbering(NumberingId::new(HEADING_NUM_ID), IndentLevel::new(3));
+    let heading4_style = bind_numbering(heading4_style, 4);
 
     // --- 見出し5 (id="5") ---
     // basedOn=Normal, next=Normal
@@ -176,7 +176,7 @@ pub fn setup_document_styles(docx: Docx, config: &Config) -> Docx {
     // heading4 と同パターン（East Asia フォントのみ指定）
     let heading5_fonts = RunFonts::new().east_asia(&config.fonts.heading_ja);
 
-    let mut heading5_style = Style::new("5", StyleType::Paragraph)
+    let heading5_style = Style::new("5", StyleType::Paragraph)
         .name("heading 5")
         .based_on("Normal")
         .next("Normal")
@@ -184,161 +184,67 @@ pub fn setup_document_styles(docx: Docx, config: &Config) -> Docx {
         .bold()
         .fonts(heading5_fonts)
         .outline_lvl(4);
-    heading5_style.paragraph_property = heading5_style
-        .paragraph_property
-        .numbering(NumberingId::new(HEADING_NUM_ID), IndentLevel::new(4));
+    let heading5_style = bind_numbering(heading5_style, 5);
 
     // --- 見出し番号定義 (abstractNumId=8, numId=2) ---
-    let mut abstract_numbering = AbstractNumbering::new(HEADING_ABSTRACT_NUM_ID)
-        // Level 0: decimal, "%1.", indent left=420, hanging=420, pStyle="1"
-        .add_level(
-            Level::new(
-                0,
-                Start::new(1),
-                NumberFormat::new("decimal"),
-                LevelText::new("%1."),
-                LevelJc::new("left"),
-            )
-            .paragraph_style("1")
-            .indent(
-                Some(config.indent.heading1_left),
-                Some(SpecialIndentType::Hanging(config.indent.heading1_hanging)),
-                None,
-                None,
-            ),
-        )
-        // Level 1: decimal, "%1.%2.", indent left=612, hanging=612, pStyle="2"
-        .add_level(
-            Level::new(
-                1,
-                Start::new(1),
-                NumberFormat::new("decimal"),
-                LevelText::new("%1.%2."),
-                LevelJc::new("left"),
-            )
-            .paragraph_style("2")
-            .indent(
-                Some(config.indent.heading2_left),
-                Some(SpecialIndentType::Hanging(config.indent.heading2_hanging)),
-                None,
-                None,
-            ),
-        )
-        // Level 2: decimal, "%1.%2.%3", indent left=783, hanging=783, pStyle="3"
-        .add_level(
-            Level::new(
-                2,
-                Start::new(1),
-                NumberFormat::new("decimal"),
-                LevelText::new("%1.%2.%3"),
-                LevelJc::new("left"),
-            )
-            .paragraph_style("3")
-            .indent(
-                Some(config.indent.heading3_left),
-                Some(SpecialIndentType::Hanging(config.indent.heading3_hanging)),
-                None,
-                None,
-            ),
-        )
-        // Level 3: decimal, "（%4）", indent left=709, hanging=709, pStyle="4"
-        // Style 4 のインデント定義に合わせる
-        .add_level(
-            Level::new(
-                3,
-                Start::new(1),
-                NumberFormat::new("decimal"),
-                LevelText::new("\u{FF08}%4\u{FF09}"),
-                LevelJc::new("left"),
-            )
-            .paragraph_style("4")
-            .indent(
-                Some(config.indent.heading4_left),
-                Some(SpecialIndentType::Hanging(config.indent.heading4_hanging)),
-                None,
-                None,
-            ),
-        )
-        // Level 4: decimalEnclosedCircle（丸数字 ① ② ...）, pStyle="5"
-        .add_level(
-            Level::new(
-                4,
-                Start::new(1),
-                NumberFormat::new("decimalEnclosedCircle"),
-                LevelText::new("%5"),
-                LevelJc::new("left"),
-            )
-            .paragraph_style("5")
-            .indent(
-                Some(config.indent.heading5_left),
-                Some(SpecialIndentType::Hanging(config.indent.heading5_hanging)),
-                None,
-                None,
-            ),
-        )
-        .add_level(
-            Level::new(
-                5,
-                Start::new(1),
-                NumberFormat::new("decimalEnclosedCircle"),
-                LevelText::new("%6"),
-                LevelJc::new("left"),
-            )
-            .indent(
-                Some(config.indent.heading6_left),
-                Some(SpecialIndentType::Hanging(config.indent.heading6_hanging)),
-                None,
-                None,
-            ),
-        )
-        .add_level(
-            Level::new(
-                6,
-                Start::new(1),
-                NumberFormat::new("decimal"),
-                LevelText::new("%7."),
-                LevelJc::new("left"),
-            )
-            .indent(
-                Some(2940),
-                Some(SpecialIndentType::Hanging(420)),
-                None,
-                None,
-            ),
-        )
-        .add_level(
-            Level::new(
-                7,
-                Start::new(1),
-                NumberFormat::new("aiueoFullWidth"),
-                LevelText::new("(%8)"),
-                LevelJc::new("left"),
-            )
-            .indent(
-                Some(3360),
-                Some(SpecialIndentType::Hanging(420)),
-                None,
-                None,
-            ),
-        )
-        .add_level(
-            Level::new(
-                8,
-                Start::new(1),
-                NumberFormat::new("decimalEnclosedCircle"),
-                LevelText::new("%9"),
-                LevelJc::new("left"),
-            )
-            .indent(
-                Some(3780),
-                Some(SpecialIndentType::Hanging(420)),
-                None,
-                None,
-            ),
-        );
-    abstract_numbering.multi_level_type = Some("multilevel".to_string());
+    // フォーマットは採番の深さ（ilvl）に固定し、pStyle・インデントは
+    // base_header オフセットに応じた markdown レベルへバインドする。
+    // base_header = "none" のときは定義そのものを出力しない。
+    const HEADING_LEVEL_FORMATS: [(&str, &str); 9] = [
+        ("decimal", "%1."),
+        ("decimal", "%1.%2."),
+        ("decimal", "%1.%2.%3"),
+        ("decimal", "\u{FF08}%4\u{FF09}"),
+        ("decimalEnclosedCircle", "%5"),
+        ("decimalEnclosedCircle", "%6"),
+        ("decimal", "%7."),
+        ("aiueoFullWidth", "(%8)"),
+        ("decimalEnclosedCircle", "%9"),
+    ];
 
-    let numbering = Numbering::new(HEADING_NUM_ID, HEADING_ABSTRACT_NUM_ID);
+    // markdown レベルに応じたインデント（H7 以降は markdown に存在しないが、
+    // ilvl 6-8 の定義を維持するため従来の固定値を使う）
+    let heading_indent = |markdown_level: u8| -> (i32, i32) {
+        match markdown_level {
+            1 => (config.indent.heading1_left, config.indent.heading1_hanging),
+            2 => (config.indent.heading2_left, config.indent.heading2_hanging),
+            3 => (config.indent.heading3_left, config.indent.heading3_hanging),
+            4 => (config.indent.heading4_left, config.indent.heading4_hanging),
+            5 => (config.indent.heading5_left, config.indent.heading5_hanging),
+            6 => (config.indent.heading6_left, config.indent.heading6_hanging),
+            7 => (2940, 420),
+            8 => (3360, 420),
+            _ => (3780, 420),
+        }
+    };
+
+    let heading_numbering = offset.map(|offset| {
+        let mut abstract_numbering = AbstractNumbering::new(HEADING_ABSTRACT_NUM_ID);
+        for (ilvl, (format, text)) in HEADING_LEVEL_FORMATS.iter().enumerate() {
+            let markdown_level = ilvl as u8 + 1 + offset;
+            let (left, hanging) = heading_indent(markdown_level);
+            let mut level = Level::new(
+                ilvl,
+                Start::new(1),
+                NumberFormat::new(*format),
+                LevelText::new(*text),
+                LevelJc::new("left"),
+            )
+            .indent(
+                Some(left),
+                Some(SpecialIndentType::Hanging(hanging)),
+                None,
+                None,
+            );
+            // 対応する見出しスタイルが存在するレベルのみ pStyle を付ける
+            if (1..=5).contains(&markdown_level) {
+                level = level.paragraph_style(markdown_level.to_string());
+            }
+            abstract_numbering = abstract_numbering.add_level(level);
+        }
+        abstract_numbering.multi_level_type = Some("multilevel".to_string());
+        abstract_numbering
+    });
 
     // --- 本文ｰ見出しレベル1~3 (id="13") ---
     // sample.docx 準拠の本文スタイル（字下げ付き）
@@ -389,23 +295,104 @@ pub fn setup_document_styles(docx: Docx, config: &Config) -> Docx {
         .name("Bullet List")
         .based_on("Normal");
 
-    docx.add_style(normal_style)
+    let mut docx = docx
+        .add_style(normal_style)
         .add_style(body_text_style)
         .add_style(heading1_style)
         .add_style(heading2_style)
         .add_style(heading3_style)
         .add_style(heading4_style)
         .add_style(heading5_style)
-        .add_style(bullet_style)
-        .add_abstract_numbering(abstract_numbering)
-        .add_abstract_numbering(bullet_abstract)
-        .add_numbering(numbering)
+        .add_style(bullet_style);
+    if let Some(abstract_numbering) = heading_numbering {
+        docx = docx
+            .add_abstract_numbering(abstract_numbering)
+            .add_numbering(Numbering::new(HEADING_NUM_ID, HEADING_ABSTRACT_NUM_ID));
+    }
+    docx.add_abstract_numbering(bullet_abstract)
         .add_numbering(bullet_numbering)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::BaseHeader;
+
+    /// 指定 ilvl の `<w:lvl>` ブロックを取り出す（最初に一致したもの = 見出し用定義）
+    fn lvl_block(xml: &str, ilvl: usize) -> &str {
+        let start_tag = format!(r#"<w:lvl w:ilvl="{}""#, ilvl);
+        let start = xml.find(&start_tag).expect("lvl should exist");
+        let end = xml[start..].find("</w:lvl>").expect("lvl should close") + start;
+        &xml[start..end]
+    }
+
+    /// 指定 styleId の `<w:style>` ブロックを取り出す
+    fn style_block<'a>(xml: &'a str, style_id: &str) -> &'a str {
+        let start_tag = format!(r#"w:styleId="{}""#, style_id);
+        let start = xml.find(&start_tag).expect("style should exist");
+        let end = xml[start..].find("</w:style>").expect("style should close") + start;
+        &xml[start..end]
+    }
+
+    #[test]
+    fn base_header_h2_shifts_numbering_levels() {
+        let mut config = Config::default();
+        config.numbering.base_header = BaseHeader::H2;
+
+        let built = setup_document_styles(Docx::new(), &config).build();
+        let numberings = String::from_utf8(built.numberings).unwrap();
+        let styles = String::from_utf8(built.styles).unwrap();
+
+        // 見出し用定義（abstractNumId=8）のブロックに限定する
+        // （docx-rs はデフォルトの abstractNum id=1 を常に出力するため）
+        let start = numberings.find(r#"w:abstractNumId="8""#).unwrap();
+        let end = numberings[start..].find("</w:abstractNum>").unwrap() + start;
+        let heading_part = &numberings[start..end];
+
+        // ilvl0 は見出し2にバインドされ、フォーマットは "%1."、インデントは heading2 設定
+        let lvl0 = lvl_block(heading_part, 0);
+        assert!(lvl0.contains(r#"<w:lvlText w:val="%1." />"#));
+        assert!(lvl0.contains(r#"<w:pStyle w:val="2" />"#));
+        assert!(lvl0.contains(r#"w:left="612""#));
+        assert!(lvl0.contains(r#"w:hanging="612""#));
+
+        // ilvl1〜3 は見出し3〜5にバインド
+        let lvl1 = lvl_block(heading_part, 1);
+        assert!(lvl1.contains(r#"<w:pStyle w:val="3" />"#));
+        assert!(lvl1.contains(r#"w:left="783""#));
+        let lvl2 = lvl_block(heading_part, 2);
+        assert!(lvl2.contains(r#"<w:pStyle w:val="4" />"#));
+        let lvl3 = lvl_block(heading_part, 3);
+        assert!(lvl3.contains(r#"<w:pStyle w:val="5" />"#));
+
+        // 見出し1は採番にバインドされない
+        assert!(!heading_part.contains(r#"<w:pStyle w:val="1" />"#));
+
+        // スタイル側: 見出し1に numPr なし、見出し2が numId=2 を持つ
+        assert!(!style_block(&styles, "1").contains("<w:numPr"));
+        assert!(style_block(&styles, "2").contains(r#"<w:numId w:val="2" />"#));
+    }
+
+    #[test]
+    fn base_header_none_omits_heading_numbering() {
+        let mut config = Config::default();
+        config.numbering.base_header = BaseHeader::None;
+
+        let built = setup_document_styles(Docx::new(), &config).build();
+        let numberings = String::from_utf8(built.numberings).unwrap();
+        let styles = String::from_utf8(built.styles).unwrap();
+
+        // 見出し採番定義そのものを出力しない（バレット定義と docx-rs の
+        // デフォルト定義 id=1 は残る）
+        assert!(!numberings.contains(r#"w:abstractNumId="8""#));
+        assert!(!numberings.contains(r#"<w:num w:numId="2""#));
+        assert!(!numberings.contains("<w:pStyle"));
+
+        // どの見出しスタイルにも numPr を付けない
+        for id in ["1", "2", "3", "4", "5"] {
+            assert!(!style_block(&styles, id).contains("<w:numPr"));
+        }
+    }
 
     #[test]
     fn heading_styles_include_spacing_for_levels_one_and_two() {

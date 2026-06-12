@@ -51,3 +51,4 @@ level2 = "▲"
 [numbering]
 figure_format = "sequential"
 table_format = "sequential"
+base_header = "h1"

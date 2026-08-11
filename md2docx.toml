@@ -51,3 +51,21 @@ level2 = "▲"
 [numbering]
 figure_format = "sequential"
 table_format = "sequential"
+
+[heading]
+# heading_shift = true にすると:
+#   #    -> Word 標準スタイル「表題」（中央揃え）
+#   ##   -> 見出し1
+#   ###  -> 見出し2
+#   #### -> 見出し3
+heading_shift = false
+# 表題スタイルのフォントサイズ (pt)  ※ heading_shift = true 時に有効
+title_size = 18.0
+
+[equal]
+# ==text== による文字装飾
+enabled = true
+# 省略すると周囲と同じ文字サイズ
+font_size = 18.0
+# 省略すると背景色なし（#RRGGBB または RRGGBB）
+background_color = "#FFFF00"

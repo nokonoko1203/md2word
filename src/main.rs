@@ -83,11 +83,25 @@ use crate::config::Config;
   figure_format = \"sequential\"   # 図番号の形式（sequential / chapter）
   table_format  = \"sequential\"   # 表番号の形式（sequential / chapter）
 
+  [line_numbers]
+  enabled  = false              # 行番号を有効にする（true / false）
+  count_by = 1                  # N 行ごとに番号を表示
+  start    = 1                  # 開始番号
+  restart  = \"newPage\"          # 採番リセット: newPage / newSection / continuous
+
+  [code_block]
+  border = false                # コードブロックを罫線で囲む（true / false）
+
+  [equal]
+  enabled = false               # ==text== による文字装飾を有効にする
+  font_size = 18.0              # 文字サイズ (pt、省略時は周囲と同じ)
+  background_color = \"#FFFF00\" # 背景色 (省略時は背景色なし)
+
 対応する Markdown 要素:
   見出し (H1-H5, 自動採番)    段落                  箇条書き (ネスト対応)
   番号付きリスト (ネスト対応)  表 (自動表番号付与)   コードブロック
   画像 (自動図番号付与)        改ページ (`\\pagebreak`)   水平線
-  インライン: テキスト / コード / 太字 / 斜体 / リンク"
+  インライン: テキスト / コード / 太字 / 斜体 / ==文字装飾== / リンク"
 )]
 struct Cli {
     /// 変換する Markdown ファイルのパス
@@ -128,7 +142,7 @@ fn main() -> Result<()> {
     let base_path = input_path.parent().unwrap_or_else(|| Path::new("."));
 
     // Markdown → IR
-    let blocks = parser::parse_markdown(&markdown)
+    let blocks = parser::parse_markdown(&markdown, config.equal.enabled)
         .with_context(|| format!("Markdownの解釈に失敗: {}", input_path.display()))?;
 
     // IR → docx
@@ -138,7 +152,27 @@ fn main() -> Result<()> {
     let file = std::fs::File::create(&output_path)
         .with_context(|| format!("出力ファイルの作成に失敗: {}", output_path.display()))?;
 
-    docx.build().pack(file)?;
+    let mut xml_docx = docx.build();
+
+    // 行番号が有効な場合、document.xml の <w:sectPr> に <w:lnNumType> を注入する
+    if config.line_numbers.enabled {
+        let ln_xml = format!(
+            r#"<w:lnNumType w:countBy="{}" w:start="{}" w:restart="{}"/>"#,
+            config.line_numbers.count_by,
+            config.line_numbers.start,
+            config.line_numbers.restart,
+        );
+        let doc_str = String::from_utf8(std::mem::take(&mut xml_docx.document))
+            .context("document.xml が有効な UTF-8 ではありません")?;
+        // 最後の </w:sectPr> の直前に挿入（メインセクションプロパティを対象にする）
+        if let Some(pos) = doc_str.rfind("</w:sectPr>") {
+            let mut modified = doc_str;
+            modified.insert_str(pos, &ln_xml);
+            xml_docx.document = modified.into_bytes();
+        }
+    }
+
+    xml_docx.pack(file)?;
 
     println!("変換完了: {}", output_path.display());
     Ok(())

@@ -107,11 +107,23 @@ impl<'a> ConvertContext<'a> {
     }
 
     fn convert_heading(&mut self, docx: Docx, level: u8, content: &[Inline]) -> Docx {
-        // heading_mgr のカウンタを進める（番号同期のため）
-        let _ = self.heading_mgr.next_heading(level, content);
+        // heading_shift モードかつ # (level==1) → 表題として出力
+        if self.config.heading.heading_shift && level == 1 {
+            return self.convert_title(docx, content);
+        }
 
-        // H1 出現時: 章番号を更新し、章内カウンタをリセット
-        if level == 1 {
+        // heading_shift モードでは ## 以降を1段下げる (## → H1 相当)
+        let effective_level = if self.config.heading.heading_shift {
+            level - 1
+        } else {
+            level
+        };
+
+        // heading_mgr のカウンタを進める（番号同期のため）
+        let _ = self.heading_mgr.next_heading(effective_level, content);
+
+        // H1 相当出現時: 章番号を更新し、章内カウンタをリセット
+        if effective_level == 1 {
             self.chapter_number = self.heading_mgr.current_h1_number();
             self.figure_in_chapter = 0;
             self.table_in_chapter = 0;
@@ -119,13 +131,15 @@ impl<'a> ConvertContext<'a> {
 
         // テキストから既存の番号部分を除去
         let plain_text: String = content.iter().map(|i| i.to_plain_text()).collect();
-        let display_text = self.heading_mgr.strip_number(level, plain_text.trim());
+        let display_text = self
+            .heading_mgr
+            .strip_number(effective_level, plain_text.trim());
 
         // Run はテキストのみ（フォント・サイズ・boldはスタイルが担当）
         let run = Run::new().add_text(&display_text);
 
         // スタイル ID: 見出し1="1", 見出し2="2", ...
-        let style_id = level.to_string();
+        let style_id = effective_level.to_string();
 
         // 段落にスタイルと numbering を適用
         let para = Paragraph::new()
@@ -133,10 +147,19 @@ impl<'a> ConvertContext<'a> {
             .style(&style_id)
             .numbering(
                 NumberingId::new(styles::HEADING_NUM_ID),
-                IndentLevel::new((level as usize).saturating_sub(1)),
+                IndentLevel::new((effective_level as usize).saturating_sub(1)),
             )
             .keep_next(true);
 
+        docx.add_paragraph(para)
+    }
+
+    fn convert_title(&self, docx: Docx, content: &[Inline]) -> Docx {
+        let plain_text: String = content.iter().map(|i| i.to_plain_text()).collect();
+        let run = Run::new().add_text(plain_text.trim());
+        let para = Paragraph::new()
+            .add_run(run)
+            .style(styles::TITLE_STYLE_ID);
         docx.add_paragraph(para)
     }
 
@@ -181,15 +204,22 @@ impl<'a> ConvertContext<'a> {
 
     fn convert_paragraph(&self, docx: Docx, content: &[Inline]) -> Docx {
         let para = self
-            .build_paragraph(content, false, InlineStyle::Body)
+            .build_paragraph(content, false, false, false, InlineStyle::Body)
             .style(styles::BODY_TEXT_STYLE_ID);
         docx.add_paragraph(para)
     }
 
-    fn build_paragraph(&self, content: &[Inline], bold: bool, style: InlineStyle) -> Paragraph {
+    fn build_paragraph(
+        &self,
+        content: &[Inline],
+        bold: bool,
+        italic: bool,
+        equal: bool,
+        style: InlineStyle,
+    ) -> Paragraph {
         let mut para = Paragraph::new();
         for inline in content {
-            para = self.add_inline_to_paragraph(para, inline, bold, style);
+            para = self.add_inline_to_paragraph(para, inline, bold, italic, equal, style);
         }
         para
     }
@@ -199,37 +229,41 @@ impl<'a> ConvertContext<'a> {
         para: Paragraph,
         inline: &Inline,
         bold: bool,
+        italic: bool,
+        equal: bool,
         style: InlineStyle,
     ) -> Paragraph {
         match inline {
             Inline::Text(text) => {
                 let processed = process_text(text);
-                let mut run = self.make_run(&processed, style);
-                if bold {
-                    run = run.bold();
-                }
+                let run =
+                    self.apply_inline_format(self.make_run(&processed, style), bold, italic, equal);
                 para.add_run(run)
             }
             Inline::Code(code) => {
                 let display = format!("「{}」", code);
-                let mut run = self.make_run(&display, style);
-                if bold {
-                    run = run.bold();
-                }
+                let run =
+                    self.apply_inline_format(self.make_run(&display, style), bold, italic, equal);
                 para.add_run(run)
             }
             Inline::Bold(children) => {
                 let mut p = para;
                 for child in children {
-                    // Bold/Italic → プレーンテキスト化（計画に従いWordスタイルとしてのbold/italicは使わない）
-                    p = self.add_inline_to_paragraph(p, child, bold, style);
+                    p = self.add_inline_to_paragraph(p, child, true, italic, equal, style);
                 }
                 p
             }
             Inline::Italic(children) => {
                 let mut p = para;
                 for child in children {
-                    p = self.add_inline_to_paragraph(p, child, bold, style);
+                    p = self.add_inline_to_paragraph(p, child, bold, true, equal, style);
+                }
+                p
+            }
+            Inline::Equal(children) => {
+                let mut p = para;
+                for child in children {
+                    p = self.add_inline_to_paragraph(p, child, bold, italic, true, style);
                 }
                 p
             }
@@ -238,10 +272,8 @@ impl<'a> ConvertContext<'a> {
                 let display = if label.is_empty() { url.clone() } else { label };
                 let processed = process_text(&display);
 
-                let mut run = self.make_run(&processed, style);
-                if bold {
-                    run = run.bold();
-                }
+                let run =
+                    self.apply_inline_format(self.make_run(&processed, style), bold, italic, equal);
 
                 let hyperlink = if let Some(anchor) = url.strip_prefix('#') {
                     Hyperlink::new(anchor, HyperlinkType::Anchor).add_run(run)
@@ -251,7 +283,12 @@ impl<'a> ConvertContext<'a> {
 
                 para.add_hyperlink(hyperlink)
             }
-            Inline::SoftBreak => para.add_run(self.make_run(" ", style)),
+            Inline::SoftBreak => para.add_run(self.apply_inline_format(
+                self.make_run(" ", style),
+                bold,
+                italic,
+                equal,
+            )),
             Inline::HardBreak => para.add_run(Run::new().add_break(BreakType::TextWrapping)),
         }
     }
@@ -290,6 +327,30 @@ impl<'a> ConvertContext<'a> {
             .fonts(fonts)
     }
 
+    fn apply_inline_format(&self, mut run: Run, bold: bool, italic: bool, equal: bool) -> Run {
+        if bold {
+            run = run.bold();
+        }
+        if italic {
+            run = run.italic();
+        }
+        if equal && self.config.equal.enabled {
+            if let Some(font_size) = self.config.equal.font_size
+                && font_size.is_finite()
+                && font_size > 0.0
+            {
+                run = run.size(styles::pt_to_half_point(font_size));
+            }
+            if let Some(background_color) = &self.config.equal.background_color {
+                let color = background_color.trim().trim_start_matches('#');
+                if !color.is_empty() {
+                    run = run.shading(Shading::new().fill(color));
+                }
+            }
+        }
+        run
+    }
+
     fn convert_bullet_list(&mut self, docx: Docx, items: &[ListItem], depth: usize) -> Docx {
         let mut d = docx;
         for item in items {
@@ -301,7 +362,14 @@ impl<'a> ConvertContext<'a> {
             );
 
             for inline in &item.content {
-                para = self.add_inline_to_paragraph(para, inline, false, InlineStyle::Body);
+                para = self.add_inline_to_paragraph(
+                    para,
+                    inline,
+                    false,
+                    false,
+                    false,
+                    InlineStyle::Body,
+                );
             }
             d = d.add_paragraph(para);
 
@@ -346,7 +414,14 @@ impl<'a> ConvertContext<'a> {
             para = para.add_run(prefix_run);
 
             for inline in &item.content {
-                para = self.add_inline_to_paragraph(para, inline, false, InlineStyle::Body);
+                para = self.add_inline_to_paragraph(
+                    para,
+                    inline,
+                    false,
+                    false,
+                    false,
+                    InlineStyle::Body,
+                );
             }
             d = d.add_paragraph(para);
 
@@ -441,8 +516,14 @@ impl<'a> ConvertContext<'a> {
             .map(|(index, cell_content)| {
                 let mut para = Paragraph::new().align(AlignmentType::Center);
                 for inline in cell_content {
-                    para =
-                        self.add_inline_to_paragraph(para, inline, true, InlineStyle::TableHeader);
+                    para = self.add_inline_to_paragraph(
+                        para,
+                        inline,
+                        true,
+                        false,
+                        false,
+                        InlineStyle::TableHeader,
+                    );
                 }
                 TableCell::new()
                     .width(column_widths[index], WidthType::Dxa)
@@ -467,6 +548,8 @@ impl<'a> ConvertContext<'a> {
                         para = self.add_inline_to_paragraph(
                             para,
                             inline,
+                            false,
+                            false,
                             false,
                             InlineStyle::TableBody,
                         );
@@ -504,13 +587,21 @@ impl<'a> ConvertContext<'a> {
             .cs("Courier New");
 
         let mut d = docx;
-        for line in code.lines() {
+        let use_border = self.config.code_block.border;
+        let lines: Vec<&str> = code.lines().collect();
+        let n = lines.len();
+        for (i, line) in lines.iter().enumerate() {
             let run = Run::new()
-                .add_text(line)
+                .add_text(*line)
                 .size(styles::pt_to_half_point(9.0))
                 .fonts(fonts.clone());
 
-            let para = Paragraph::new().add_run(run);
+            let mut para = Paragraph::new().add_run(run);
+            if use_border {
+                para.property = para
+                    .property
+                    .set_borders(code_block_borders(i == 0, i == n - 1));
+            }
             d = d.add_paragraph(para);
         }
         d
@@ -701,10 +792,82 @@ fn is_japanese_char(c: char) -> bool {
     )
 }
 
+/// コードブロック用の段落罫線を生成する。
+/// 複数行のコードブロック全体を一つの枠で囲むため、先頭/末尾で設定を変える。
+/// - 先頭行: 上・左・右の罫線 ＋ Between（次行との間を繋ぐ）
+/// - 中間行: 左・右の罫線 ＋ Between
+/// - 末尾行: 下・左・右の罫線（Between なし）
+/// - 1行のみ: 上下左右すべて
+fn code_block_borders(is_first: bool, is_last: bool) -> ParagraphBorders {
+    let make = |pos| ParagraphBorder::new(pos).size(4).space(4);
+    let mut pb = ParagraphBorders::with_empty();
+    pb = pb.set(make(ParagraphBorderPosition::Left));
+    pb = pb.set(make(ParagraphBorderPosition::Right));
+    if is_first {
+        pb = pb.set(make(ParagraphBorderPosition::Top));
+    }
+    if is_last {
+        pb = pb.set(make(ParagraphBorderPosition::Bottom));
+    }
+    pb
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use docx_rs::{DocumentChild, HyperlinkData, ParagraphChild, RunChild};
+
+    #[test]
+    fn applies_markdown_bold_and_italic_to_word_runs() {
+        let blocks = vec![Block::Paragraph {
+            content: vec![
+                Inline::Text("normal".to_string()),
+                Inline::Bold(vec![Inline::Text("bold".to_string())]),
+                Inline::Italic(vec![Inline::Text("italic".to_string())]),
+                Inline::Bold(vec![Inline::Italic(vec![Inline::Text("both".to_string())])]),
+            ],
+        }];
+
+        let docx = convert_to_docx(&blocks, &Config::default(), Path::new(".")).unwrap();
+        let para = match &docx.document.children[0] {
+            DocumentChild::Paragraph(p) => p,
+            other => panic!("unexpected child: {other:?}"),
+        };
+        let runs: Vec<_> = para
+            .children
+            .iter()
+            .filter_map(|child| match child {
+                ParagraphChild::Run(run) => Some(run),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(runs.len(), 4);
+        assert!(runs[0].run_property.bold.is_none());
+        assert!(runs[0].run_property.italic.is_none());
+        assert!(runs[1].run_property.bold.is_some());
+        assert!(runs[1].run_property.italic.is_none());
+        assert!(runs[2].run_property.bold.is_none());
+        assert!(runs[2].run_property.italic.is_some());
+        assert!(runs[3].run_property.bold.is_some());
+        assert!(runs[3].run_property.italic.is_some());
+    }
+
+    #[test]
+    fn applies_configured_equal_markup_size_and_background() {
+        let mut config = Config::default();
+        config.equal.enabled = true;
+        config.equal.font_size = Some(18.0);
+        config.equal.background_color = Some("#FFFF00".to_string());
+        let blocks = crate::parser::parse_markdown("==marked==", config.equal.enabled).unwrap();
+
+        let docx = convert_to_docx(&blocks, &config, Path::new(".")).unwrap();
+        let xml = String::from_utf8(docx.document.build()).unwrap();
+
+        assert!(xml.contains(r#"<w:sz w:val="36" />"#));
+        assert!(xml.contains(r#"<w:shd w:val="clear" w:color="auto" w:fill="FFFF00" />"#));
+        assert!(!xml.contains("==marked=="));
+    }
 
     #[test]
     fn converts_inline_link_to_word_hyperlink() {

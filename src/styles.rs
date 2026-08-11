@@ -28,6 +28,9 @@ const BULLET_ABSTRACT_NUM_ID: usize = 9;
 /// 箇条書きスタイルの styleId
 pub const BULLET_STYLE_ID: &str = "BulletList";
 
+/// 表題スタイルの styleId（Word 標準「表題」= "Title"）
+pub const TITLE_STYLE_ID: &str = "Title";
+
 const HEADING1_BEFORE_PT: f64 = 24.0;
 const HEADING1_AFTER_PT: f64 = 12.0;
 const HEADING2_BEFORE_PT: f64 = 18.0;
@@ -187,6 +190,24 @@ pub fn setup_document_styles(docx: Docx, config: &Config) -> Docx {
     heading5_style.paragraph_property = heading5_style
         .paragraph_property
         .numbering(NumberingId::new(HEADING_NUM_ID), IndentLevel::new(4));
+
+    // --- 表題 (id="Title") ---
+    // heading_shift = true 時に # に対応するスタイル
+    // Word 標準「表題」に合わせ: 中央揃え、大フォント、番号なし
+    let title_fonts = RunFonts::new()
+        .ascii(&config.fonts.heading_en)
+        .hi_ansi(&config.fonts.heading_en)
+        .east_asia(&config.fonts.heading_ja)
+        .cs(&config.fonts.heading_en);
+
+    let title_style = Style::new(TITLE_STYLE_ID, StyleType::Paragraph)
+        .name("Title")
+        .based_on("Normal")
+        .next("Normal")
+        .size(pt_to_half_point(config.heading.title_size))
+        .bold()
+        .fonts(title_fonts)
+        .align(AlignmentType::Center);
 
     // --- 見出し番号定義 (abstractNumId=8, numId=2) ---
     let mut abstract_numbering = AbstractNumbering::new(HEADING_ABSTRACT_NUM_ID)
@@ -390,6 +411,7 @@ pub fn setup_document_styles(docx: Docx, config: &Config) -> Docx {
         .based_on("Normal");
 
     docx.add_style(normal_style)
+        .add_style(title_style)
         .add_style(body_text_style)
         .add_style(heading1_style)
         .add_style(heading2_style)

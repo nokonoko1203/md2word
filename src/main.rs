@@ -92,11 +92,16 @@ use crate::config::Config;
   [code_block]
   border = false                # コードブロックを罫線で囲む（true / false）
 
+  [equal]
+  enabled = false               # ==text== による文字装飾を有効にする
+  font_size = 18.0              # 文字サイズ (pt、省略時は周囲と同じ)
+  background_color = \"#FFFF00\" # 背景色 (省略時は背景色なし)
+
 対応する Markdown 要素:
   見出し (H1-H5, 自動採番)    段落                  箇条書き (ネスト対応)
   番号付きリスト (ネスト対応)  表 (自動表番号付与)   コードブロック
   画像 (自動図番号付与)        改ページ (`\\pagebreak`)   水平線
-  インライン: テキスト / コード / 太字 / 斜体 / リンク"
+  インライン: テキスト / コード / 太字 / 斜体 / ==文字装飾== / リンク"
 )]
 struct Cli {
     /// 変換する Markdown ファイルのパス
@@ -137,7 +142,7 @@ fn main() -> Result<()> {
     let base_path = input_path.parent().unwrap_or_else(|| Path::new("."));
 
     // Markdown → IR
-    let blocks = parser::parse_markdown(&markdown)
+    let blocks = parser::parse_markdown(&markdown, config.equal.enabled)
         .with_context(|| format!("Markdownの解釈に失敗: {}", input_path.display()))?;
 
     // IR → docx

@@ -5,7 +5,7 @@ use crate::ir::{Alignment, Block, Inline, ListItem};
 
 const PAGE_BREAK_DIRECTIVE: &str = r"\pagebreak";
 
-pub fn parse_markdown(input: &str) -> Result<Vec<Block>> {
+pub fn parse_markdown(input: &str, equal_enabled: bool) -> Result<Vec<Block>> {
     let mut options = Options::empty();
     options.insert(Options::ENABLE_TABLES);
     options.insert(Options::ENABLE_STRIKETHROUGH);
@@ -15,9 +15,100 @@ pub fn parse_markdown(input: &str) -> Result<Vec<Block>> {
     let events: Vec<Event> = parser.collect();
 
     let converter = EventConverter::new();
-    let blocks = converter.convert(&events);
+    let mut blocks = converter.convert(&events);
+    if equal_enabled {
+        parse_equal_markup_in_blocks(&mut blocks);
+    }
     validate_page_break_usage(&blocks)?;
     Ok(blocks)
+}
+
+fn parse_equal_markup_in_blocks(blocks: &mut [Block]) {
+    for block in blocks {
+        match block {
+            Block::Heading { content, .. } | Block::Paragraph { content } => {
+                *content = parse_equal_markup(std::mem::take(content));
+            }
+            Block::BulletList { items } | Block::OrderedList { items, .. } => {
+                for item in items {
+                    item.content = parse_equal_markup(std::mem::take(&mut item.content));
+                    parse_equal_markup_in_blocks(&mut item.children);
+                }
+            }
+            Block::Table { headers, rows, .. } => {
+                for cell in headers {
+                    *cell = parse_equal_markup(std::mem::take(cell));
+                }
+                for cell in rows.iter_mut().flatten() {
+                    *cell = parse_equal_markup(std::mem::take(cell));
+                }
+            }
+            Block::BlockQuote { children } => parse_equal_markup_in_blocks(children),
+            Block::PageBreak
+            | Block::CodeBlock { .. }
+            | Block::Image { .. }
+            | Block::ThematicBreak => {}
+        }
+    }
+}
+
+fn parse_equal_markup(inlines: Vec<Inline>) -> Vec<Inline> {
+    let mut output = Vec::new();
+    let mut equal_content: Option<Vec<Inline>> = None;
+
+    for inline in inlines {
+        let inline = match inline {
+            Inline::Bold(children) => Inline::Bold(parse_equal_markup(children)),
+            Inline::Italic(children) => Inline::Italic(parse_equal_markup(children)),
+            Inline::Link { text, url } => Inline::Link {
+                text: parse_equal_markup(text),
+                url,
+            },
+            other => other,
+        };
+
+        if let Inline::Text(text) = inline {
+            let mut parts = text.split("==").peekable();
+            while let Some(part) = parts.next() {
+                if !part.is_empty() {
+                    push_equal_inline(
+                        &mut output,
+                        &mut equal_content,
+                        Inline::Text(part.to_string()),
+                    );
+                }
+                if parts.peek().is_some() {
+                    if let Some(children) = equal_content.take() {
+                        output.push(Inline::Equal(children));
+                    } else {
+                        equal_content = Some(Vec::new());
+                    }
+                }
+            }
+        } else {
+            push_equal_inline(&mut output, &mut equal_content, inline);
+        }
+    }
+
+    // 閉じる `==` がない場合は Markdown の入力をそのまま残す。
+    if let Some(mut children) = equal_content {
+        output.push(Inline::Text("==".to_string()));
+        output.append(&mut children);
+    }
+
+    output
+}
+
+fn push_equal_inline(
+    output: &mut Vec<Inline>,
+    equal_content: &mut Option<Vec<Inline>>,
+    inline: Inline,
+) {
+    if let Some(children) = equal_content {
+        children.push(inline);
+    } else {
+        output.push(inline);
+    }
 }
 
 struct EventConverter {
@@ -400,7 +491,9 @@ fn validate_inlines(inlines: &[Inline]) -> Result<()> {
 fn validate_inline(inline: &Inline) -> Result<()> {
     match inline {
         Inline::Text(text) | Inline::Code(text) => ensure_no_page_break_directive(text)?,
-        Inline::Bold(children) | Inline::Italic(children) => validate_inlines(children)?,
+        Inline::Bold(children) | Inline::Italic(children) | Inline::Equal(children) => {
+            validate_inlines(children)?
+        }
         Inline::Link { text, url } => {
             validate_inlines(text)?;
             ensure_no_page_break_directive(url)?;
@@ -437,7 +530,7 @@ mod tests {
 
     #[test]
     fn preserves_link_url_in_inline_ir() {
-        let blocks = parse_markdown("[Rust](https://www.rust-lang.org/)").unwrap();
+        let blocks = parse_markdown("[Rust](https://www.rust-lang.org/)", false).unwrap();
         assert_eq!(blocks.len(), 1);
 
         match &blocks[0] {
@@ -455,7 +548,8 @@ mod tests {
 
     #[test]
     fn does_not_mix_urls_between_multiple_links() {
-        let blocks = parse_markdown("[A](https://a.example) [B](https://b.example)").unwrap();
+        let blocks =
+            parse_markdown("[A](https://a.example) [B](https://b.example)", false).unwrap();
         assert_eq!(blocks.len(), 1);
 
         match &blocks[0] {
@@ -480,15 +574,47 @@ mod tests {
     }
 
     #[test]
+    fn parses_equal_markup_when_enabled() {
+        let blocks = parse_markdown("before ==**important** text== after", true).unwrap();
+        let content = match &blocks[0] {
+            Block::Paragraph { content } => content,
+            other => panic!("unexpected block: {other:?}"),
+        };
+
+        assert!(matches!(&content[0], Inline::Text(text) if text == "before "));
+        match &content[1] {
+            Inline::Equal(children) => {
+                assert!(matches!(&children[0], Inline::Bold(_)));
+                assert!(matches!(&children[1], Inline::Text(text) if text == " text"));
+            }
+            other => panic!("unexpected inline: {other:?}"),
+        }
+        assert!(matches!(&content[2], Inline::Text(text) if text == " after"));
+    }
+
+    #[test]
+    fn leaves_equal_delimiters_as_text_when_disabled_or_unclosed() {
+        for (markdown, enabled) in [("==plain==", false), ("==unclosed", true)] {
+            let blocks = parse_markdown(markdown, enabled).unwrap();
+            let content = match &blocks[0] {
+                Block::Paragraph { content } => content,
+                other => panic!("unexpected block: {other:?}"),
+            };
+            let text: String = content.iter().map(Inline::to_plain_text).collect();
+            assert_eq!(text, markdown);
+        }
+    }
+
+    #[test]
     fn parses_page_break_directive_as_dedicated_block() {
-        let blocks = parse_markdown("\\pagebreak").unwrap();
+        let blocks = parse_markdown("\\pagebreak", false).unwrap();
         assert_eq!(blocks.len(), 1);
         assert!(matches!(blocks[0], Block::PageBreak));
     }
 
     #[test]
     fn rejects_page_break_directive_inside_regular_paragraph() {
-        let error = parse_markdown("before \\pagebreak after").unwrap_err();
+        let error = parse_markdown("before \\pagebreak after", false).unwrap_err();
         assert!(
             error
                 .to_string()

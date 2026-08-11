@@ -57,6 +57,7 @@ pub enum Inline {
     Code(String),
     Bold(Vec<Inline>),
     Italic(Vec<Inline>),
+    Equal(Vec<Inline>),
     Link { text: Vec<Inline>, url: String },
     SoftBreak,
     HardBreak,
@@ -68,7 +69,7 @@ impl Inline {
         match self {
             Inline::Text(s) => s.clone(),
             Inline::Code(s) => format!("「{}」", s),
-            Inline::Bold(children) | Inline::Italic(children) => {
+            Inline::Bold(children) | Inline::Italic(children) | Inline::Equal(children) => {
                 children.iter().map(|c| c.to_plain_text()).collect()
             }
             Inline::Link { text, .. } => text.iter().map(|c| c.to_plain_text()).collect(),

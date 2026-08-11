@@ -61,3 +61,11 @@ table_format = "sequential"
 heading_shift = false
 # 表題スタイルのフォントサイズ (pt)  ※ heading_shift = true 時に有効
 title_size = 18.0
+
+[equal]
+# ==text== による文字装飾
+enabled = true
+# 省略すると周囲と同じ文字サイズ
+font_size = 18.0
+# 省略すると背景色なし（#RRGGBB または RRGGBB）
+background_color = "#FFFF00"

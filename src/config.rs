@@ -32,6 +32,8 @@ pub struct Config {
     pub code_block: CodeBlockConfig,
     #[serde(default)]
     pub heading: HeadingConfig,
+    #[serde(default)]
+    pub equal: EqualConfig,
 }
 
 #[derive(Debug, Deserialize)]
@@ -399,6 +401,20 @@ impl Default for CodeBlockConfig {
     }
 }
 
+/// `==text==` による文字装飾設定
+#[derive(Debug, Deserialize, Default)]
+pub struct EqualConfig {
+    /// `==text==` の解析と装飾を有効にする（デフォルト: false）
+    #[serde(default)]
+    pub enabled: bool,
+    /// 装飾部分の文字サイズ (pt)。省略時は周囲と同じサイズ
+    #[serde(default)]
+    pub font_size: Option<f64>,
+    /// 装飾部分の背景色 (`#RRGGBB` または `RRGGBB`)。省略時は背景色なし
+    #[serde(default)]
+    pub background_color: Option<String>,
+}
+
 /// 見出し関連設定
 #[derive(Debug, Deserialize)]
 pub struct HeadingConfig {
@@ -428,5 +444,34 @@ impl Config {
         let content = std::fs::read_to_string(path)?;
         let config: Config = toml::from_str(&content)?;
         Ok(config)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reads_equal_markup_options_and_allows_optional_styles() {
+        let configured: Config = toml::from_str(
+            r##"
+                [equal]
+                enabled = true
+                font_size = 18.0
+                background_color = "#FFFF00"
+            "##,
+        )
+        .unwrap();
+        assert!(configured.equal.enabled);
+        assert_eq!(configured.equal.font_size, Some(18.0));
+        assert_eq!(configured.equal.background_color.as_deref(), Some("#FFFF00"));
+
+        let minimal: Config = toml::from_str("[equal]\nenabled = true").unwrap();
+        assert!(minimal.equal.enabled);
+        assert_eq!(minimal.equal.font_size, None);
+        assert_eq!(minimal.equal.background_color, None);
+
+        let defaults: Config = toml::from_str("").unwrap();
+        assert!(!defaults.equal.enabled);
     }
 }
